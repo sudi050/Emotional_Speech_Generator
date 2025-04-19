@@ -2,9 +2,7 @@ import os
 import numpy as np
 import torch
 import torchaudio
-from torchvision.models import resnet18
-import torchvision.transforms as transforms
-from torchvision import models
+from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 from tqdm import tqdm
@@ -12,24 +10,18 @@ import zipfile
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import StepLR
 import shutil
+import torch.nn as nn
+import matplotlib.pyplot as plt
 
-# def unzip_file(zip_path, extract_to):
-#     os.makedirs(extract_to, exist_ok=True)
-#     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-#         zip_ref.extractall(extract_to)
-#     print(f"[✅] Extracted '{zip_path}' to '{extract_to}'")
-
-# zip_file_path = "/content/out.zip"        
-# VIDEO_INPUT_DIR = "data"
-
-unzip_file(zip_file_path, VIDEO_INPUT_DIR)
 # === SETTINGS ===
-DATA_DIR = "data"
+DATA_DIR = "../data/cleaned_audio"
 IMG_SIZE = 224
-BATCH_SIZE = 16
-NUM_CLASSES = len(os.listdir(DATA_DIR))
+BATCH_SIZE = 4
+NUM_CLASSES = 5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+# === DATASET ===
 class AudioDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.samples = []
@@ -38,10 +30,10 @@ class AudioDataset(Dataset):
 
         file_list = [f for f in os.listdir(root_dir) if f.endswith(('.wav', '.mp3'))]
 
-        # Extract labels from filenames (you can adjust this parsing as needed)
+        # Extract labels from filenames (customize if needed)
         all_labels = set()
         for file in file_list:
-            label = file.split('_')[0]  # or customize label parsing
+            label = file.split('_')[0]
             all_labels.add(label)
 
         self.label_map = {label: idx for idx, label in enumerate(sorted(all_labels))}
@@ -52,7 +44,6 @@ class AudioDataset(Dataset):
             self.samples.append(filepath)
             self.labels.append(self.label_map[label])
 
-        # Define spectrogram transform
         self.spectrogram = torchaudio.transforms.MelSpectrogram()
 
     def __len__(self):
@@ -63,44 +54,61 @@ class AudioDataset(Dataset):
         label = self.labels[idx]
 
         waveform, sample_rate = torchaudio.load(audio_path)
+        mel_spec = self.spectrogram(waveform).squeeze(0)
 
-        # Convert to mel spectrogram
-        mel_spec = self.spectrogram(waveform).squeeze(0)  # shape: [freq, time]
+        mel_spec_normalized = (mel_spec - mel_spec.min()) / (mel_spec.max() - mel_spec.min() + 1e-6) * 255.0
+        mel_spec_normalized = mel_spec_normalized.unsqueeze(0)
 
-        # Normalize to 0–255 and convert to PIL image
-        mel_spec = (mel_spec - mel_spec.min()) / (mel_spec.max() - mel_spec.min()) * 255.0
-        mel_spec = mel_spec.numpy().astype(np.uint8)
-        mel_image = Image.fromarray(mel_spec)
+        # Pad or crop to fixed size (time dimension)
+        target_time_dim = 400
+        current_time_dim = mel_spec_normalized.shape[2]
+
+        if current_time_dim < target_time_dim:
+            pad_amount = target_time_dim - current_time_dim
+            mel_spec_normalized = torch.nn.functional.pad(mel_spec_normalized, (0, pad_amount))
+        else:
+            mel_spec_normalized = mel_spec_normalized[:, :, :target_time_dim]
+
+        mel_spec_normalized = mel_spec_normalized.squeeze(0)  # Final shape: [freq, time]
 
         if self.transform:
-            mel_image = self.transform(mel_image)
+            mel_spec_np = mel_spec_normalized.numpy()
+            mel_spec_transformed = self.transform(mel_spec_np)
+            return mel_spec_transformed, label
+        else:
+            return mel_spec_normalized, label
 
-        return mel_image, label
 
 # === TRANSFORMS ===
-transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomAffine(degrees=15, translate=(0.1, 0.1)),
-    transforms.Grayscale(num_output_channels=3),
+transform_dnn = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize([0.5], [0.5])
 ])
 
+# === MODEL ===
+class SimpleDNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super(SimpleDNN, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, num_classes)
 
-# === MODEL SETUP ===
-model = resnet18(weights="DEFAULT")
-model.fc = torch.nn.Linear(model.fc.in_features, NUM_CLASSES)
-model = model.to(DEVICE)
+    def forward(self, x):
+        x = x.view(x.size(0), -1) 
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
 
-# === TRAINING LOOP ===
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-# === SPLIT DATA ===
-dataset = AudioDataset(DATA_DIR, transform=transform)
+# === DATA SPLIT ===
+dataset = AudioDataset(DATA_DIR, transform=transform_dnn)
 
-train_indices, val_indices = train_test_split(list(range(len(dataset))), test_size=0.2, stratify=dataset.labels, random_state=42)
+train_indices, val_indices = train_test_split(
+    list(range(len(dataset))),
+    test_size=0.2,
+    stratify=dataset.labels,
+    random_state=42
+)
 
 train_subset = torch.utils.data.Subset(dataset, train_indices)
 val_subset = torch.utils.data.Subset(dataset, val_indices)
@@ -108,29 +116,38 @@ val_subset = torch.utils.data.Subset(dataset, val_indices)
 train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False)
 
+# === MODEL SETUP ===
+input_size = dataset[0][0].numel()  
+hidden_size = 128
+model = SimpleDNN(input_size, hidden_size, NUM_CLASSES).to(DEVICE)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+
 # === EARLY STOPPING CONFIG ===
 early_stopping_patience = 5
 best_val_loss = float('inf')
 epochs_no_improve = 0
 
-# === TRAINING LOOP W/ VALIDATION ===
+# === TRAINING LOOP ===
 train_losses = []
 val_losses = []
 EPOCHS = 50
-scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+
 for epoch in range(EPOCHS):
     scheduler.step()
     model.train()
     train_loss = 0.0
-    for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} - Training"):
-        images, labels = images.to(DEVICE), labels.to(DEVICE)
-        outputs = model(images)
+
+    for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} - Training"):
+        inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+        outputs = model(inputs)
         loss = criterion(outputs, labels)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
         train_loss += loss.item()
 
     # === VALIDATION ===
@@ -139,9 +156,9 @@ for epoch in range(EPOCHS):
     correct = 0
     total = 0
     with torch.no_grad():
-        for images, labels in tqdm(val_loader, desc="Validation"):
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-            outputs = model(images)
+        for inputs, labels in tqdm(val_loader, desc="Validation"):
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
+            outputs = model(inputs)
             loss = criterion(outputs, labels)
             val_loss += loss.item()
 
@@ -155,31 +172,28 @@ for epoch in range(EPOCHS):
     train_losses.append(avg_train_loss)
     val_losses.append(avg_val_loss)
 
-    train_losses.append(avg_train_loss)
-    val_losses.append(avg_val_loss)
-
     print(f"Epoch {epoch+1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.4f}")
 
-    # === EARLY STOPPING ===
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         epochs_no_improve = 0
-        torch.save(model.state_dict(), "emotclassifier1.pth")  # Save best model
+        torch.save(model.state_dict(), "emotclassifier_dnn.pth")
     else:
         epochs_no_improve += 1
         if epochs_no_improve >= early_stopping_patience:
             print(f"Early stopping triggered at epoch {epoch+1}")
             break
 
-# # === LOAD BEST MODEL ===
-model.load_state_dict(torch.load("emotclassifier1.pth"))
-model.eval()
+# === LOAD BEST MODEL ===
+model_dnn = SimpleDNN(input_size, hidden_size, NUM_CLASSES).to(DEVICE)
+model_dnn.load_state_dict(torch.load("emotclassifier_dnn.pth"))
+model_dnn.eval()
 
-import matplotlib.pyplot as plt
+# === PLOT LOSSES ===
 plt.figure(figsize=(10, 5))
 plt.plot(train_losses, label='Training Loss', marker='o')
 plt.plot(val_losses, label='Validation Loss', marker='o')
-plt.title("Training vs Validation Loss")
+plt.title("Training vs Validation Loss (DNN)")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.legend()
@@ -187,21 +201,16 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-from pathlib import Path
-import shutil
-
-# === PREDICT AND SAVE HIGH CONFIDENCE FILES ===
-HIGH_PROBA_THRESHOLD = 0.9
-SAVE_DIR = "high_confidence"
+# === SAVE HIGH CONFIDENCE PREDICTIONS ===
+HIGH_PROBA_THRESHOLD = 0.95
+SAVE_DIR = "../data/confindent_classified"
 os.makedirs(SAVE_DIR, exist_ok=True)
-
-model.eval()
 
 with torch.no_grad():
     for idx in range(len(dataset)):
-        mel_image, label = dataset[idx]
-        input_tensor = mel_image.unsqueeze(0).to(DEVICE)
-        output = model(input_tensor)
+        mel_spec_flat, label = dataset[idx]
+        input_tensor = mel_spec_flat.unsqueeze(0).to(DEVICE)
+        output = model_dnn(input_tensor)
         probabilities = torch.nn.functional.softmax(output, dim=1)
         prob, predicted = torch.max(probabilities, 1)
 
