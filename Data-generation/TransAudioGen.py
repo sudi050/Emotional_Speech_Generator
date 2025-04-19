@@ -2,9 +2,9 @@ import os
 from gtts import gTTS
 import whisper
 
-AUDIO_INPUT_DIR = "extracted_audio"
-TRANSCRIPT_OUTPUT_DIR = "transcripts"
-NEUTRAL_AUDIO_DIR = "neutral_audio"
+AUDIO_INPUT_DIR = "../data/confident_classified"
+TRANSCRIPT_OUTPUT_DIR = "../data/transcripts"
+NEUTRAL_AUDIO_DIR = "../data/neutral_audio"
 
 os.makedirs(TRANSCRIPT_OUTPUT_DIR, exist_ok=True)
 os.makedirs(NEUTRAL_AUDIO_DIR, exist_ok=True)
