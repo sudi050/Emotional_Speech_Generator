@@ -15,7 +15,6 @@ def remove_background_voice(input_file, output_file):
             os.remove(temp_wav_path)
             return
 
-        # Get noise sample from first 0.5 seconds
         noise_sample = y[:int(0.5 * sr)]
 
         print(" Reducing noise...")
@@ -34,10 +33,10 @@ def remove_background_voice(input_file, output_file):
 input_base = "Data-generation/character_audio_clips"
 output_folder = "../unlabelled_bg_removed"
 
-input_paths = glob.glob(os.path.join(input_base, "*/audio/*.mp3"))
+input_paths = glob.glob(os.path.join(input_base, "*/audio/*.wav"))
 
 if not input_paths:
-    print(f" No MP3 files found in '{input_base}/*/audio/'.")
+    print(f" No wav files found in '{input_base}/*/audio/'.")
 else:
     os.makedirs(output_folder, exist_ok=True)
 
