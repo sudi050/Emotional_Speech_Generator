@@ -8,6 +8,10 @@ Inside-Out Voice Dataset
 Follow the procedures to run the program
 Short Clips Generation
 
+"Make sure that you have the Inside out movie SRT file and video file in the same directory as this script."
+expected movie_subtitle_file path - "Data-generation/Inside.Out.2015.720p.BluRay.x264.YIFY.srt"
+expected movie_video_file path - "Data-generation/Inside.Out.2015.720p.BluRay.x264.YIFY.mp4"
+
 `python3 Data-generation/clip_generator.py`
 
 Background Removal
