@@ -1,12 +1,9 @@
 import os
-import numpy as np
 import torch
 import torchaudio
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
-from PIL import Image
 from tqdm import tqdm
-import zipfile
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import StepLR
 import shutil
@@ -14,7 +11,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 
 # === SETTINGS ===
-DATA_DIR = "../data/cleaned_audio"
+DATA_DIR = "./bg_removed"
 IMG_SIZE = 224
 BATCH_SIZE = 4
 NUM_CLASSES = 5
@@ -28,19 +25,19 @@ class AudioDataset(Dataset):
         self.labels = []
         self.transform = transform
 
-        file_list = [f for f in os.listdir(root_dir) if f.endswith(('.wav', '.mp3'))]
+        file_list = [f for f in os.listdir(root_dir) if f.endswith((".wav", ".mp3"))]
 
         # Extract labels from filenames (customize if needed)
         all_labels = set()
         for file in file_list:
-            label = file.split('_')[0]
+            label = file.split("_")[0]
             all_labels.add(label)
 
         self.label_map = {label: idx for idx, label in enumerate(sorted(all_labels))}
 
         for file in file_list:
             filepath = os.path.join(root_dir, file)
-            label = file.split('_')[0]
+            label = file.split("_")[0]
             self.samples.append(filepath)
             self.labels.append(self.label_map[label])
 
@@ -56,7 +53,9 @@ class AudioDataset(Dataset):
         waveform, sample_rate = torchaudio.load(audio_path)
         mel_spec = self.spectrogram(waveform).squeeze(0)
 
-        mel_spec_normalized = (mel_spec - mel_spec.min()) / (mel_spec.max() - mel_spec.min() + 1e-6) * 255.0
+        mel_spec_normalized = (
+            (mel_spec - mel_spec.min()) / (mel_spec.max() - mel_spec.min() + 1e-6) * 255.0
+        )
         mel_spec_normalized = mel_spec_normalized.unsqueeze(0)
 
         # Pad or crop to fixed size (time dimension)
@@ -65,7 +64,9 @@ class AudioDataset(Dataset):
 
         if current_time_dim < target_time_dim:
             pad_amount = target_time_dim - current_time_dim
-            mel_spec_normalized = torch.nn.functional.pad(mel_spec_normalized, (0, pad_amount))
+            mel_spec_normalized = torch.nn.functional.pad(
+                mel_spec_normalized, (0, pad_amount)
+            )
         else:
             mel_spec_normalized = mel_spec_normalized[:, :, :target_time_dim]
 
@@ -80,10 +81,10 @@ class AudioDataset(Dataset):
 
 
 # === TRANSFORMS ===
-transform_dnn = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize([0.5], [0.5])
-])
+transform_dnn = transforms.Compose(
+    [transforms.ToTensor(), transforms.Normalize([0.5], [0.5])]
+)
+
 
 # === MODEL ===
 class SimpleDNN(nn.Module):
@@ -94,7 +95,7 @@ class SimpleDNN(nn.Module):
         self.fc2 = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        x = x.view(x.size(0), -1) 
+        x = x.view(x.size(0), -1)
         x = self.relu(self.fc1(x))
         x = self.fc2(x)
         return x
@@ -104,10 +105,7 @@ class SimpleDNN(nn.Module):
 dataset = AudioDataset(DATA_DIR, transform=transform_dnn)
 
 train_indices, val_indices = train_test_split(
-    list(range(len(dataset))),
-    test_size=0.2,
-    stratify=dataset.labels,
-    random_state=42
+    list(range(len(dataset))), test_size=0.2, stratify=dataset.labels, random_state=42
 )
 
 train_subset = torch.utils.data.Subset(dataset, train_indices)
@@ -117,7 +115,7 @@ train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False)
 
 # === MODEL SETUP ===
-input_size = dataset[0][0].numel()  
+input_size = dataset[0][0].numel()
 hidden_size = 128
 model = SimpleDNN(input_size, hidden_size, NUM_CLASSES).to(DEVICE)
 
@@ -127,7 +125,7 @@ scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
 
 # === EARLY STOPPING CONFIG ===
 early_stopping_patience = 5
-best_val_loss = float('inf')
+best_val_loss = float("inf")
 epochs_no_improve = 0
 
 # === TRAINING LOOP ===
@@ -140,7 +138,9 @@ for epoch in range(EPOCHS):
     model.train()
     train_loss = 0.0
 
-    for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} - Training"):
+    for inputs, labels in tqdm(
+        train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS} - Training"
+    ):
         inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
         outputs = model(inputs)
         loss = criterion(outputs, labels)
@@ -172,7 +172,9 @@ for epoch in range(EPOCHS):
     train_losses.append(avg_train_loss)
     val_losses.append(avg_val_loss)
 
-    print(f"Epoch {epoch+1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.4f}")
+    print(
+        f"Epoch {epoch + 1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.4f}"
+    )
 
     if val_loss < best_val_loss:
         best_val_loss = val_loss
@@ -181,7 +183,7 @@ for epoch in range(EPOCHS):
     else:
         epochs_no_improve += 1
         if epochs_no_improve >= early_stopping_patience:
-            print(f"Early stopping triggered at epoch {epoch+1}")
+            print(f"Early stopping triggered at epoch {epoch + 1}")
             break
 
 # === LOAD BEST MODEL ===
@@ -191,8 +193,8 @@ model_dnn.eval()
 
 # === PLOT LOSSES ===
 plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label='Training Loss', marker='o')
-plt.plot(val_losses, label='Validation Loss', marker='o')
+plt.plot(train_losses, label="Training Loss", marker="o")
+plt.plot(val_losses, label="Validation Loss", marker="o")
 plt.title("Training vs Validation Loss (DNN)")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
@@ -203,7 +205,7 @@ plt.show()
 
 # === SAVE HIGH CONFIDENCE PREDICTIONS ===
 HIGH_PROBA_THRESHOLD = 0.95
-SAVE_DIR = "../data/confindent_classified"
+SAVE_DIR = "./train_data_confindent_classified"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 with torch.no_grad():
@@ -222,4 +224,6 @@ with torch.no_grad():
             filename = os.path.basename(src_path)
             dst_path = os.path.join(SAVE_DIR, f"{confidence:.2f}_{filename}")
             shutil.copy(src_path, dst_path)
-            print(f"Saved '{filename}' → class: {predicted_class}, confidence: {confidence:.2f}")
+            print(
+                f"Saved '{filename}' → class: {predicted_class}, confidence: {confidence:.2f}"
+            )
